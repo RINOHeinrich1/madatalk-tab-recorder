@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Enregistreur d'onglet — MadaTalk</title>
+<style>
+  :root {
+    --bg: #0b1020;
+    --panel: #151c33;
+    --panel2: #1c2542;
+    --text: #e8ecf8;
+    --muted: #97a3c4;
+    --accent: #6c8cff;
+    --danger: #ff5c6c;
+    --ok: #34d399;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: radial-gradient(1200px 600px at 20% -10%, #1b2a5a 0%, var(--bg) 55%);
+    color: var(--text);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 32px 16px;
+  }
+  .card {
+    width: min(880px, 100%);
+    background: var(--panel);
+    border: 1px solid #263055;
+    border-radius: 16px;
+    padding: 28px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, .45);
+  }
+  h1 { margin: 0 0 6px; font-size: 22px; }
+  p.sub { margin: 0 0 22px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+  button {
+    appearance: none;
+    border: 0;
+    border-radius: 10px;
+    padding: 11px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    color: #fff;
+    background: var(--panel2);
+    transition: transform .08s ease, opacity .15s ease, background .15s ease;
+  }
+  button:hover:not(:disabled) { transform: translateY(-1px); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  #start { background: linear-gradient(180deg, #7b97ff, var(--accent)); }
+  #stop { background: linear-gradient(180deg, #ff7784, var(--danger)); }
+  #download { background: linear-gradient(180deg, #4ee0ae, #16a97b); color: #04241a; }
+  .video-wrap {
+    position: relative;
+    background: #05080f;
+    border: 1px solid #263055;
+    border-radius: 12px;
+    overflow: hidden;
+    aspect-ratio: 16 / 9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 16px;
+  }
+  video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+  .placeholder { color: var(--muted); font-size: 14px; text-align: center; padding: 20px; }
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 14px;
+    color: var(--muted);
+    min-height: 22px;
+  }
+  .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #55618a; flex: 0 0 auto;
+  }
+  .dot.rec { background: var(--danger); animation: pulse 1.1s infinite; }
+  .dot.ok { background: var(--ok); }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255, 92, 108, .55); }
+    50% { box-shadow: 0 0 0 8px rgba(255, 92, 108, 0); }
+  }
+  .hint {
+    margin-top: 18px;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--muted);
+    background: #101733;
+    border: 1px solid #222c4e;
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .hint b { color: var(--text); }
+</style>
+</head>
+<body>
+  <main class="card">
+    <h1>Enregistreur d'onglet</h1>
+    <p class="sub">
+      Enregistrez un onglet, une fenêtre ou tout l'écran, puis téléchargez la vidéo
+      directement depuis votre navigateur. Aucun fichier n'est envoyé sur un serveur.
+    </p>
+
+    <div class="row">
+      <button id="start">● Démarrer l'enregistrement</button>
+      <button id="stop" disabled>■ Arrêter</button>
+      <button id="download" disabled>Télécharger la vidéo</button>
+    </div>
+
+    <div class="video-wrap">
+      <video id="video" muted autoplay playsinline hidden></video>
+      <div class="placeholder" id="placeholder">
+        La prévisualisation apparaîtra ici après le démarrage.
+      </div>
+    </div>
+
+    <div class="status">
+      <span class="dot" id="dot"></span>
+      <span id="status">Prêt.</span>
+    </div>
+
+    <div class="hint">
+      <b>Astuce :</b> dans la fenêtre de partage, choisissez «&nbsp;Onglet Chrome&nbsp;»
+      et cochez «&nbsp;Partager l'audio de l'onglet&nbsp;» si vous voulez le son.
+      Le format produit est <b>.webm</b> (lisible par Chrome, VLC et la plupart des outils).
+    </div>
+  </main>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const startBtn = $("start");
+  const stopBtn = $("stop");
+  const dlBtn = $("download");
+  const video = $("video");
+  const placeholder = $("placeholder");
+  const statusEl = $("status");
+  const dot = $("dot");
+
+  let stream = null;
+  let recorder = null;
+  let chunks = [];
+  let blobUrl = null;
+  let filename = "enregistrement.webm";
+  let stopping = false;
+
+  function setStatus(text, kind) {
+    statusEl.textContent = text;
+    dot.className = "dot" + (kind ? " " + kind : "");
+  }
+
+  function pickMimeType() {
+    if (typeof MediaRecorder === "undefined") return "";
+    const candidates = [
+      "video/webm;codecs=vp9,opus",
+      "video/webm;codecs=vp8,opus",
+      "video/webm;codecs=vp9",
+      "video/webm;codecs=vp8",
+      "video/webm",
+    ];
+    for (const type of candidates) {
+      if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(type)) return type;
+    }
+    return "";
+  }
+
+  function stamp() {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, "0");
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
+      "_" + p(d.getHours()) + "-" + p(d.getMinutes()) + "-" + p(d.getSeconds());
+  }
+
+  function releaseStream() {
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop());
+      stream = null;
+    }
+  }
+
+  function resetDownload() {
+    if (blobUrl) {
+      URL.revokeObjectURL(blobUrl);
+      blobUrl = null;
+    }
+    dlBtn.disabled = true;
+    video.removeAttribute("src");
+    video.load();
+  }
+
+  async function start() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      setStatus("Votre navigateur ne prend pas en charge le partage d'écran.", "rec");
+      return;
+    }
+
+    resetDownload();
+    chunks = [];
+    stopping = false;
+
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 30 },
+        audio: true,
+      });
+    } catch (err) {
+      if (err && err.name === "NotAllowedError") {
+        setStatus("Partage annulé.", "");
+      } else {
+        setStatus("Impossible de démarrer : " + (err && err.message ? err.message : err), "rec");
+      }
+      return;
+    }
+
+    const hasAudio = stream.getAudioTracks().length > 0;
+    const mimeType = pickMimeType();
+
+    try {
+      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    } catch (err) {
+      releaseStream();
+      setStatus("Enregistrement non supporté par ce navigateur.", "rec");
+      return;
+    }
+
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunks.push(e.data);
+    };
+
+    recorder.onstop = () => {
+      releaseStream();
+      const type = recorder.mimeType || mimeType || "video/webm";
+      const blob = new Blob(chunks, { type });
+      if (blob.size === 0) {
+        setStatus("Aucune donnée enregistrée.", "rec");
+      } else {
+        blobUrl = URL.createObjectURL(blob);
+        video.hidden = false;
+        placeholder.hidden = true;
+        video.src = blobUrl;
+        video.controls = true;
+        video.muted = false;
+        dlBtn.disabled = false;
+        const mb = (blob.size / 1024 / 1024).toFixed(2);
+        setStatus("Enregistrement terminé (" + mb + " Mo). Téléchargez ou relisez.", "ok");
+      }
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      recorder = null;
+      streamingPreview(false);
+    };
+
+    // Stop automatique si l'utilisateur coupe le partage depuis le bandeau navigateur.
+    stream.getVideoTracks().forEach((track) => {
+      track.addEventListener("ended", () => {
+        if (recorder && recorder.state !== "inactive") stop();
+      });
+    });
+
+    filename = "enregistrement-" + stamp() + ".webm";
+
+    video.hidden = false;
+    placeholder.hidden = true;
+    video.controls = false;
+    video.muted = true;
+    video.srcObject = stream;
+    video.play().catch(() => {});
+
+    recorder.start(1000);
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    setStatus(
+      "Enregistrement en cours…" + (hasAudio ? " (avec audio)" : " (sans audio)"),
+      "rec"
+    );
+  }
+
+  function streamingPreview(on) {
+    if (on) return;
+    video.srcObject = null;
+  }
+
+  function stop() {
+    if (!recorder || recorder.state === "inactive" || stopping) return;
+    stopping = true;
+    setStatus("Finalisation…", "");
+    recorder.stop();
+  }
+
+  startBtn.addEventListener("click", start);
+  stopBtn.addEventListener("click", stop);
+  dlBtn.addEventListener("click", () => {
+    if (!blobUrl) return;
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
+
+  window.addEventListener("beforeunload", releaseStream);
+})();
+</script>
+</body>
+</html>
